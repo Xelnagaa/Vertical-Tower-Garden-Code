@@ -1,0 +1,619 @@
+
+/*
+ * Brandon Stazuk
+ * Tower Garden
+ */
+
+
+#include <UTFT.h>
+#include <URTouch.h>
+#include <Wire.h>
+
+UTFT    myGLCD(ILI9341_16,38,39,40,41);
+URTouch  myTouch( 6, 5, 4, 3, 2);
+
+#define DS1624 0x48              // address for temp sensor
+
+int iTempMSB;
+int iTempLSB;
+int iTemp16;
+int iFrac;
+char cPointer;
+
+#define RTC 0x68  
+int iOnce = 0;                                //Value for serial printing the data packet once
+int iDataPacket[6] = {0,0,0,0,0,0};       //data packet for serial monitor                                                                                                                                  
+int iDateTimeRead[7] = {0,0,0,0,0,0,0};     //data from bits saved into array
+int iTimeOld[3];
+char *d_of_w[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};     //string values for days
+
+int iDateTimeSetup[8] = {0x45,0x59,0x23,0x04,0x31,0x12,0x99,0x12};   /*   The setup for each bit
+                                                                     Wire.write(0x45);                     // Seconds 
+                                                                     Wire.write(0x59);                     // Minutes 
+                                                                     Wire.write(0x23);                     // Hours 
+                                                                     Wire.write(0x04);                     // Day
+                                                                     Wire.write(0x31);                     // Date
+                                                                     Wire.write(0x12);                     // Mounth 
+                                                                     Wire.write(0x99);                     // Year
+                                                                     Wire.write(0x12); 000100010           // Control Register
+                                                                     */
+
+int iBitMasking[7] = {0x7F,0x7F,0x3F,0x07,0x3F,0x1F,0xFF};   /*           Reads the data and masks out the bits not used
+                                                            iDateTimeRead[0] = Wire.read() & 0x7F;           // Store seconds    0111 1111        
+                                                            iDateTimeRead[1] = Wire.read() & 0x7F;           // Store minutes    0111 1111
+                                                            iDateTimeRead[2] = Wire.read() & 0x3F;           // Store hours      0011 1111
+                                                            iDateTimeRead[3] = Wire.read() & 0x07;           // Store day        0000 0111
+                                                            iDateTimeRead[4] = Wire.read() & 0x3F;           // Store date       0011 1111
+                                                            iDateTimeRead[5] = Wire.read() & 0x1F;           // Store month      0001 1111
+                                                            iDateTimeRead[6] = Wire.read() & 0xFF;           // Store Year       1111 1111
+                                                            */
+
+
+
+extern uint8_t SmallFont[];
+extern uint8_t BigFont[];
+extern uint8_t SevenSegNumFont[];
+
+int currentPage;
+
+const int iIn_1 = 8;
+const int iIn_2 = 9;
+const int iIn_3 = 10;
+const int iIn_4 = 11;
+
+const int iLightPin = A15;
+const int iHumidityPin = A14;
+
+int iHumidityValue = 0;
+int iHumidityValueOLD;
+
+int xPoint;
+int yPoint;
+
+int iLightSens = 100;
+int LightValue = 0;
+
+int iTimerSet;
+int iOnTimer = 0;
+int iRunTimer = 0;
+int iOnDown = 0;
+
+int iLightTimer = 0;  //Timer On
+int iTimeDown = 0;    //Timer remaining
+int iTimeOn = 0;
+int iTimeOff = 0;
+
+int iDayStartTime = 6;
+int iDayEndTime = 18;
+int iLightDayTime;
+int iLightRunTime;
+
+bool bDayEndTime;
+bool bDayStartTime;
+bool bLightOnOff = false;
+bool bSetLightTime = false;
+bool bSetLight = false;
+
+
+bool bOnTimer = false;              
+bool bRunTimer = false;                 
+bool bOnOff = false;
+bool bSetTime = false;                
+
+bool bLight = false;
+
+void setup() 
+{
+  Serial.begin(9600);
+  Wire.begin();                      // I2C Setup
+
+  myGLCD.InitLCD();                  // initializes LCD and touchscreen 
+  myGLCD.clrScr();                   // clears screen
+  myTouch.InitTouch();               
+  myTouch.setPrecision(PREC_HI);     // sets percision of touch screen
+
+  11  10  9   8
+  PB5 PB4 PH6 PH5
+
+  DDRB |= 0x30; // sets pins 11 and 10 as outputs for relays 
+  DDRH |= 0x60; // sets pins 9 amd 8 as outputs for relays
+  DDRK |= 0xC0;  // Setns A14 amd A15 as inputs
+  
+  PORTB |= 0x30;  // Turns off relays 
+  PORTH |= 0x60;
+  
+  currentPage = 0;                   // set current page to 0
+  DrawHomeScreen();
+  _DS1624_init();                    // Initialize DS1624 temperature sensor
+  _RTC_init();                       // Initialize DS1307 RTC
+
+  
+}
+
+void loop() 
+{
+
+  _DS1624_readtemp();         //Calls the DS1624 read function
+  _DS1624_Print();            //Prints temperature values
+  _RTC_read();                //Reads each sensor function
+  HumitityRead();
+  LightRead();
+  DisplayValues();
+  
+  if (myTouch.dataAvailable() == true)      // if touch screen is pressed x and y points are read and saved
+  {
+    myTouch.read();
+    xPoint = myTouch.getX();
+    yPoint = myTouch.getY();
+    
+    if ((xPoint>=0) && (xPoint<=40) && (yPoint>=160) && (yPoint<=180)) //Light Sub button
+    {
+      if (iLightSens > 0)
+      {
+        iLightSens = iLightSens - 1;
+      }
+    }
+
+    if ((xPoint>=56) && (xPoint<=96) && (yPoint>=160) && (yPoint<=180)) //Light Add button
+    {
+      if (iLightSens < 100)
+      {
+        iLightSens = iLightSens + 1;
+      }
+    }
+
+    
+    if ((xPoint>=0) && (xPoint<=40) && (yPoint>=200) && (yPoint<=240)) //LightTimer Sub button
+    {
+      if (iLightTimer > 0)
+      {
+        iLightTimer = iLightTimer - 1;
+      }
+    }
+
+    if ((xPoint>=56) && (xPoint<=96) && (yPoint>=200) && (yPoint<=240)) //LightTimer Add button
+    {
+      if (iLightTimer < 24)
+      {
+        iLightTimer = iLightTimer + 1;
+      }
+    }
+    
+    if ((xPoint>=112) && (xPoint<=152) && (yPoint>=200) && (yPoint<=240)) //OnTimer Sub button
+    {
+      if (iOnTimer > 0)
+      {
+        iOnTimer = iOnTimer - 1;
+      }
+    }
+    
+    if ((xPoint>=168) && (xPoint<=208) && (yPoint>=200) && (yPoint<=240)) //OnTimer Add button
+    {
+      if (iOnTimer < 60)
+      {
+        iOnTimer = iOnTimer + 1;
+      }
+    }
+    
+    if ((xPoint>=224) && (xPoint<=264) && (yPoint>=200) && (yPoint<=240)) //RunTimer Sub button
+    {
+      if (iRunTimer > 0)
+      {
+        iRunTimer = iRunTimer - 1;
+      }
+    }
+
+    if ((xPoint>=280) && (xPoint<=319) && (yPoint>=200) && (yPoint<=240)) //RunTimer Add button
+    {
+      if (iRunTimer < 60)
+      {
+        iRunTimer = iRunTimer + 1;
+      }
+    }
+
+  }
+
+  if (LightValue < iLightSens)      
+    bLight = true;
+  else
+    bLight = false;
+
+  if ((iOnTimer > 0) && (iRunTimer > 0))     // water pump is off when one or both timer values are equal to zero
+    bOnOff = true;
+  else
+    bOnOff = false;
+
+  if (bOnOff == true)             //if timers are above 0 pump will run
+  {
+
+
+    // remaining timer for water pump
+    iOnDown = (iTimerSet - (((String(iDateTimeRead[2], HEX).toInt()) * 60) + (String(iDateTimeRead[1], HEX).toInt())));
+
+    // if remaining time is less then 0 mins then adds 1440 
+    if (iOnDown < 0)
+      iOnDown = iOnDown + 1440;
+    
+    if (bOnTimer == true)   // pump off timer
+    {
+      if (bSetTime == false)    // saved current time then adds how long the on timer will be set
+      {
+        iTimerSet = (((String(iDateTimeRead[2], HEX).toInt()) * 60) + (String(iDateTimeRead[1], HEX).toInt())) + iOnTimer;   // converts hours in to mins
+        bSetTime = true;                                  // sets timer once
+        if (iTimerSet > 1439)                             // if timer is greater then 1439mins it sub tracks 1440 mins for the clock 
+          iTimerSet = iTimerSet - 1440;
+         
+        PORTB |= 0x30;  // Turns water pump relay relays    LOW == relay is normaly open       High == relay is conected to the normaly closed
+        
+      }
+
+
+      //When water timer value queals the current time then timer ends and starts the run timer
+      if (iTimerSet == (((String(iDateTimeRead[2], HEX).toInt()) * 60) + (String(iDateTimeRead[1], HEX).toInt())))  
+      {
+        bRunTimer = true;
+        bOnTimer = false;
+        bSetTime = false;
+      }
+
+    }
+    else if (bRunTimer == true)      //Water pump run timer
+    {
+      if (bSetTime == false)   // sets timer limit once
+      {
+        iTimerSet = (((String(iDateTimeRead[2], HEX).toInt()) * 60) + (String(iDateTimeRead[1], HEX).toInt())) + iRunTimer;
+        if (iTimerSet > 1439)
+          iTimerSet = iTimerSet - 1440;
+  
+        bSetTime = true;            //Turns on the water pump relay
+        PORTB &= 0x00;       // LOW == relay is normaly open       High relay is conected to the normaly closed
+      }
+
+      // if timer value equals to current timer then run timer ends and gos back to the on timer
+      if (iTimerSet == (((String(iDateTimeRead[2], HEX).toInt()) * 60) + (String(iDateTimeRead[1], HEX).toInt())))
+      {
+        bRunTimer = false;
+        bOnTimer = true;
+        bSetTime = false;
+      }
+    }
+    else     // if off timer and on timer are false or true then sets run timer as true
+    {
+      bOnTimer = false;
+      bRunTimer = true;
+      bSetTime = false;
+    }
+  }
+  else     // when timers values are 0 then relay is turned off
+  {      
+     
+    PORTB |= 0x30;  // Turns off relays  // LOW == relay is normaly open       High relay is conected to the normaly closed
+    bSetTime = false;
+    iOnDown = 0;
+  }
+
+
+  if (iLightTimer > 0)       // if light timer is 0 then lighing will be turned off
+    bLightOnOff = true;
+  else
+    bLightOnOff = false;
+
+
+  if (LightValue > iLightSens)         // Night time When it turns night it saves the time once
+  {
+    if ( bDayStartTime == false)
+    {
+      iDayStartTime = (String(iDateTimeRead[1], HEX).toInt());
+
+      bDayStartTime = true;
+      bDayEndTime = false;
+    }
+    bSetLight = false;
+  }
+  else if (LightValue <= iLightSens)         // When it turns day the day timer value is saved once
+  {
+    if (bDayEndTime == false)
+    {
+      iDayEndTime = (String(iDateTimeRead[1], HEX).toInt());
+      
+      bDayEndTime = true;
+      bDayStartTime = false;
+
+      
+    }
+    
+  }
+
+  if ((bLightOnOff == true) && (LightValue < iLightSens)) // if the timer is grater then 0 and it is night time the leds will turn on
+  {      
+
+    iLightDayTime = iDayEndTime - iDayStartTime;                   // calculats the amount of light the plants got
+    iLightRunTime = (iLightTimer - iLightDayTime) + iDayEndTime;   // calculats the amount of light the plants need
+
+    if (iLightRunTime > 23)                 // if timer is for then 24 hours then 12 hours is removed
+      iLightRunTime = iLightRunTime - 12;
+    
+    if (bSetLight == false)          //bSetLightTime   turns on of leds
+    {
+      PORTH &= 0x00;           // LOW == relay is normaly open       High relay is conected to the normaly closed
+     
+    }
+    if (iLightRunTime == (String(iDateTimeRead[1], HEX).toInt()))  // truns off LED when timer is done
+    {
+      PORTH |= 0x60;            // LOW == relay is normaly open       High relay is conected to the normaly closed      
+      bSetLight = true;
+    }
+
+  }
+  else  // turns off LEDS when it turns day or when timer is set to 0
+  {
+    PORTH |= 0x60;  // LOW == relay is normaly closed       High relay is conected to the normaly open  
+    iTimeDown = 0;
+  }
+  
+}
+
+void LightRead()   //Reads light value then maps it from 0% to 100% light
+{
+  
+  LightValue = analogRead(A15);
+  LightValue = map(LightValue,0,1023,100,0);
+
+}
+
+void HumitityRead()  //Reads humidity value then maps it from 0% to 100% light
+{
+  iHumidityValue = analogRead(A14);
+  iHumidityValue = map(iHumidityValue,0,1023,0,100);
+}
+
+/*
+ * Temperature Sensor
+ * 
+ * Print
+ * Read
+ * Setup
+ * 
+ */
+void _DS1624_Print()
+{
+
+    if ((iTempMSB & 0x80) == 128)         //reads bit 7         if bit is 1 temperature is negative
+      cPointer = '-';
+    else 
+      cPointer = '+';                                           // if the bit == 0 then temperature is positive 
+
+    if (cPointer == '-')                                        
+    {
+      iTemp16 = iTempMSB;                                     
+      iTemp16 = iTemp16 << 8;                                   //Shifts 8 bits left
+      iTemp16 = iTemp16 | iTempLSB;                             //adds iTemp16 and iTempLSB togather
+      iTemp16 = (~iTemp16) + 1;                                 // 2's complement
+      iTempMSB = iTemp16 >> 8;                                  //Reads values back into iTempMSB and iTempLSB
+      iTempLSB = iTemp16 & 0x00F8;
+    }
+        
+    iFrac = iTempLSB >> 3;                                      // Shifts bits 3 to the right
+    iFrac = map(iFrac,0,31,0,99);                               // Remaps the values between 0 and 99 
+
+}
+
+void _DS1624_readtemp() 
+{    
+  Wire.beginTransmission(DS1624);    
+  Wire.write(0xAA);                          // send READ TEMP command  
+  Wire.endTransmission();   
+  
+  Wire.requestFrom(DS1624, 2);      // request for 2 bytes    
+  iTempMSB = Wire.read();                   //receive and assign temperature bytes    
+  iTempLSB = Wire.read();
+}
+
+
+void _DS1624_init()       // Sets up temp sensor
+{ 
+  //I2C setup for Temperature Sensor  
+  Wire.begin();  
+  Wire.beginTransmission(DS1624);   
+   
+  Wire.write(0xAC);         //send ACCESS CONFIG config. register command    
+  Wire.write(0x4A);         //send CONTINUOUS CONVERSION command    
+  delay(15);                //config. register is in internal EEPROM needs at ~10ms  
+  
+  Wire.endTransmission();   
+  
+  Wire.beginTransmission(DS1624);       //must do this again, sequence is important   
+   
+  Wire.write(0xEE);                             //send START CONVERSION command    
+  delay(100);                  //this delay() is a must  
+  
+  Wire.endTransmission(); 
+}
+
+void _RTC_read()  //Reads time
+{
+  Wire.beginTransmission(RTC);          // Open comm. with RTC
+  Wire.write(0x00);                     // SEND RTC address to be accessed
+  Wire.endTransmission();               // Close I2C com. with RTC
+
+  Wire.requestFrom(RTC, 7);   // Requests 7 bytes          
+
+  for (int i = 0; i < 7;i++)
+  {
+    iDateTimeRead[i] = Wire.read() & iBitMasking[i];           //Reads in 8 BCD bytes from RTC and store values into into the array and bitmasks them
+  }
+
+  iDataPacket[0] = iDateTimeRead[5];      //Saves the data into a data pack or the serial monitor
+  iDataPacket[1] = iDateTimeRead[4];
+  iDataPacket[2] = iDateTimeRead[6];
+  iDataPacket[3] = iDateTimeRead[2];
+  iDataPacket[4] = iDateTimeRead[1];
+  iDataPacket[5] = iDateTimeRead[0];
+  
+}
+
+void _RTC_init()      // RTC setup
+{
+  Wire.beginTransmission(RTC);          // Open comm. with RTC
+
+  Wire.write(0x00);                     // Set RTC address to be accessed
+
+  for(int i;i<8;i++)
+  {
+    Wire.write(iDateTimeSetup[i]);     //Sets the bit values of all the bits 
+  }
+
+  Wire.endTransmission();               // Close I2C com. with RTC
+}
+
+
+/*
+ * 
+ * Displays Settings
+ * Displays Settings
+ * Displays Settings
+ * Displays Settings
+ *  
+ */
+
+void DisplayValues()    //Displays Values on screen
+{
+
+  myGLCD.setColor(VGA_WHITE); 
+  myGLCD.setFont(BigFont);
+  
+  myGLCD.printNumI(iOnDown, 280, 128, 2);    // Time remaining timer
+  
+  if ((iHumidityValue - iHumidityValueOLD > 1) || (iHumidityValueOLD - iHumidityValue > 1))    // if humidity changed by 2 or more it will update the screen 
+  {
+    myGLCD.printNumI(iHumidityValue,190,30);
+    iHumidityValueOLD = iHumidityValue;
+  }
+
+  myGLCD.printNumI(String(iTempMSB, HEX).toInt(),40, 30);        //prints tempeture
+  myGLCD.printNumI(iFrac,82, 30);
+
+  myGLCD.printNumI(iLightSens,250,62,3);              // displays timer and light values
+  myGLCD.printNumI(iOnTimer,20, 112,2);
+  myGLCD.printNumI(iRunTimer,180, 112,2);
+  myGLCD.printNumI(LightValue, 260, 78, 3);
+  myGLCD.printNumI(iLightTimer,184, 128,2);
+
+  
+
+  if (iTimeOld[2] != iDateTimeRead[2])         // Displays clock values
+  {
+    myGLCD.printNumI(String(iDateTimeRead[2], HEX).toInt(), 98, 46,2);         //  myGLCD.printNumI(iDateTimeRead[2]& 0x3F, LEFT, 46,2);
+    if (iDateTimeRead[2] < 10)
+      myGLCD.print("0", 98, 46);
+
+    iTimeOld[2] = iDateTimeRead[2];
+  } 
+
+  if (iTimeOld[1] != iDateTimeRead[1])
+  {
+    myGLCD.printNumI(String(iDateTimeRead[1], HEX).toInt(), CENTER, 46,2);
+    if (iDateTimeRead[1] < 10)
+      myGLCD.print("0", 144, 46);
+
+    iTimeOld[1] = iDateTimeRead[1];
+  }
+  if (iTimeOld[0] != iDateTimeRead[0])
+  {
+    myGLCD.printNumI(String(iDateTimeRead[0], HEX).toInt(), 192, 46,2);
+  
+    if (iDateTimeRead[0] < 10)
+      myGLCD.print("0", 192, 46);
+
+      iTimeOld[0] = iDateTimeRead[0];
+  }
+  
+
+  if (bRunTimer == true)
+    myGLCD.print("On ", 80, 78);
+  else
+    myGLCD.print("OFF", 80, 78);
+
+  if ((bSetLight == false) && (LightValue < iLightSens))
+    myGLCD.print("On ", 80, 62);
+  else
+    myGLCD.print("OFF", 80, 62);
+
+
+}
+
+void DrawHomeScreen()         // Display Screen setup
+{
+  //Name
+  myGLCD.setBackColor(VGA_BLACK);
+  myGLCD.setColor(VGA_LIME); 
+  myGLCD.setFont(BigFont); 
+  myGLCD.print("Tower Garden", CENTER, 0);
+  myGLCD.setColor(VGA_RED); 
+  myGLCD.setFont(SmallFont);
+  myGLCD.print("By Brandon Staszuk",CENTER,16);
+
+  //Text
+  myGLCD.setColor(VGA_WHITE); 
+  myGLCD.setFont(BigFont); 
+  myGLCD.print("'C", 114, 30);
+  myGLCD.print("LED:", LEFT, 62);
+  myGLCD.print("Sens: 50", 155, 62);
+  myGLCD.print("%", 224, 30);
+  myGLCD.print(".",70 , 30);
+  myGLCD.print(":", 130, 46);
+  myGLCD.print(":", 176, 46);
+
+
+  myGLCD.print("Pump:", LEFT, 78);
+  myGLCD.print("Light:", 155, 78);
+  myGLCD.print("Water(On|Run)Timer", CENTER, 96);
+  myGLCD.print("mins", 68, 112);
+  myGLCD.print("mins", 228, 112);
+  
+  myGLCD.print("LightTime:", 16, 128);
+  myGLCD.print("TR:", 228, 128);
+
+
+  //Bottons
+  myGLCD.setColor(VGA_TEAL); 
+  myGLCD.fillRect(0,200,40,240);
+  myGLCD.fillRect(56,200,96,240);
+  myGLCD.fillRect(112,200,152,240);
+  myGLCD.fillRect(168,200,208,240);
+  myGLCD.fillRect(224,200,264,240);
+  myGLCD.fillRect(280,200,319,240);
+  myGLCD.fillRect(56,160,96,180);
+  myGLCD.fillRect(0,160,40,180);
+
+
+  myGLCD.setColor(VGA_WHITE); 
+  myGLCD.drawRect(0,200,40,240);
+  myGLCD.drawRect(56,200,96,240);
+  myGLCD.drawRect(112,200,152,240);
+  myGLCD.drawRect(168,200,208,240);
+  myGLCD.drawRect(224,200,264,240);
+  myGLCD.drawRect(280,200,319,240);
+  myGLCD.drawRect(56,160,96,180);
+  myGLCD.drawRect(0,160,40,180);
+
+  myGLCD.setBackColor(VGA_TEAL);
+  myGLCD.print("-", 13, 212);
+  myGLCD.print("+", 69, 212);
+  myGLCD.print("-", 125, 212);
+  myGLCD.print("+", 181, 212);
+  myGLCD.print("-", 237, 212);
+  myGLCD.print("+", 293, 212);
+  myGLCD.print("-", 13, 162);
+  myGLCD.print("+", 69, 162);
+
+  
+  myGLCD.setColor(VGA_RED); 
+  myGLCD.setBackColor(VGA_BLACK);
+  myGLCD.setFont(SmallFont); 
+  myGLCD.print("LightTimer", 15, 187);
+  myGLCD.print("OnTimer", 135, 187);
+  myGLCD.print("RunTimer", 240, 187);
+  myGLCD.print("LightSens", 15, 148);
+
+}
