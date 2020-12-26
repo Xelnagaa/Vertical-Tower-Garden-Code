@@ -112,8 +112,6 @@ void setup()
   myTouch.InitTouch();               
   myTouch.setPrecision(PREC_HI);     // sets percision of touch screen
 
-  11  10  9   8
-  PB5 PB4 PH6 PH5
 
   DDRB |= 0x30; // sets pins 11 and 10 as outputs for relays 
   DDRH |= 0x60; // sets pins 9 amd 8 as outputs for relays
