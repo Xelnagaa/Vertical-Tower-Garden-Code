@@ -1,9 +1,6 @@
 
-/*
- * Brandon Stazuk
- * Tower Garden
- */
 
+// http://rinkydinkelectronics.com/library.php
 
 #include <UTFT.h>
 #include <URTouch.h>
